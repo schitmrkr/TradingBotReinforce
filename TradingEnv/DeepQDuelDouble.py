@@ -40,23 +40,24 @@ class ReplayBuffer():
     def store_transition(self, state, action, reward, state_, done):
         index = self.mem_cntr % self.mem_size
 
-        self.balance_memory[index] = state['balance']
-        self.new_balance_memory[index] = state_['balance']
-        self.buy_count_memory[index] = state['buy_count']
-        self.new_buy_count_memory[index] = state_['buy_count']
+        self.balance_memory[index] = state['balance'][-1]
+        self.new_balance_memory[index] = state_['balance'][-1]
+        self.buy_count_memory[index] = state['buy_count'][-1]
+        self.new_buy_count_memory[index] = state_['buy_count'][-1]
 
-        self.close_price_memory[index] = state['raw_state']['close']
-        self.new_close_price_memory[index] = state_['raw_state']['close']
-        self.volume_memory[index] = state['raw_state']['volume']
-        self.new_volume_memory[index] = state_['raw_state']['volume']
-        self.rsi_memory[index] = state['raw_state']['rsi']
-        self.new_rsi_memory[index] = state_['raw_state']['rsi']
-        self.macd_memory[index] = state['raw_state']['macd']
-        self.new_macd_memory[index] = state_['raw_state']['macd']
-        self.cci_memory[index] = state['raw_state']['cci']
-        self.new_cci_memory[index] = state_['raw_state']['cci']
-        self.adx_memory[index] = state['raw_state']['adx']
-        self.new_adx_memory[index] = state_['raw_state']['adx']
+
+        self.close_price_memory[index] = state['raw_state']['close'][-1]
+        self.new_close_price_memory[index] = state_['raw_state']['close'][-1]
+        self.volume_memory[index] = state['raw_state']['volume'][-1]
+        self.new_volume_memory[index] = state_['raw_state']['volume'][-1]
+        self.rsi_memory[index] = state['raw_state']['rsi'][-1]
+        self.new_rsi_memory[index] = state_['raw_state']['rsi'][-1]
+        self.macd_memory[index] = state['raw_state']['macd'][-1]
+        self.new_macd_memory[index] = state_['raw_state']['macd'][-1]
+        self.cci_memory[index] = state['raw_state']['cci'][-1]
+        self.new_cci_memory[index] = state_['raw_state']['cci'][-1]
+        self.adx_memory[index] = state['raw_state']['adx'][-1]
+        self.new_adx_memory[index] = state_['raw_state']['adx'][-1]
 
         #self.state_memory[index] = state
         #self.new_state_memory[index] = state_
@@ -70,6 +71,9 @@ class ReplayBuffer():
     def sample_buffer(self, batch_size):
         max_mem = min(self.mem_cntr, self.mem_size)
         batch = np.random.choice(max_mem, batch_size, replace=False)
+
+        #print("here")
+        #print(batch)
 
         states = {
             "current_index": None,
@@ -121,6 +125,9 @@ class DuelingDeepQNetwork(nn.Module):
         self.chkpt_dir = chkpt_dir
         self.checkpoint_file = os.path.join(self.chkpt_dir + name)
 
+        self.input_dim = input_dim
+        self.n_actions = n_actions
+
         #Neural Divergence
         self.layernorm_price = nn.LayerNorm(input_dim)
         self.conv1d_price = nn.Conv1d(1, 8, 10)
@@ -151,12 +158,23 @@ class DuelingDeepQNetwork(nn.Module):
         self.to(self.device)
 
     def forward(self, state):
-        close_price = torch.FloatTensor([state["raw_state"]["close"]])
-        volume = torch.FloatTensor([state["raw_state"]["volume"]])
-        rsi = torch.FloatTensor([state["raw_state"]["rsi"]])
-        macd = torch.FloatTensor([state["raw_state"]["macd"]])
-        cci = torch.FloatTensor([state["raw_state"]["cci"]])
-        adx = torch.FloatTensor([state["raw_state"]["adx"]])
+        close_price = torch.FloatTensor(np.array([state["raw_state"]["close"]]))
+        volume = torch.FloatTensor(np.array([state["raw_state"]["volume"]]))
+        rsi = torch.FloatTensor(np.array([state["raw_state"]["rsi"]]))
+        macd = torch.FloatTensor(np.array([state["raw_state"]["macd"]]))
+        cci = torch.FloatTensor(np.array([state["raw_state"]["cci"]]))
+        adx = torch.FloatTensor(np.array([state["raw_state"]["adx"]]))
+
+        #print(close_price.shape)
+
+        close_price = close_price.view(-1,1,self.input_dim)
+        volume = volume.view(-1,1,self.input_dim)
+        rsi = rsi.view(-1,1,self.input_dim)
+        macd = macd.view(-1,1,self.input_dim)
+        cci = cci.view(-1,1,self.input_dim)
+        adx = adx.view(-1,1,self.input_dim)
+
+        #print(close_price.shape)
 
         price_norm = self.layernorm_price(close_price)
         price_conv = self.conv1d_price(price_norm)
@@ -192,15 +210,27 @@ class DuelingDeepQNetwork(nn.Module):
         V = self.V(last_layer_to_process)
         A = self.A(last_layer_to_process)
 
+        #print(A.shape)
+        #print(V.shape)
 
-        if state["buy_count"] == 0:
-            action_mask = torch.tensor([1,1,0])
-        elif state["buy_count"] >= 5:
-            action_mask = torch.tensor([0,1,1])
+        A = A.view(-1, self.n_actions)
+        V = V.view(-1, 1)
+
+        #print(A.shape)
+        #print(V.shape)
+
+        #print(state["buy_count"])
+
+        if state["buy_count"][-1] == 0:
+            A_new = A.clone()
+            A_new[:,2] = torch.min(A)
+            A = A_new
+        elif state["buy_count"][-1] >= 5:
+            A_new = A.clone()
+            A_new[:,0] = torch.min(A)
+            A = A_new
         else:
-            action_mask = torch.tensor([1,1,1])
-
-        A = action_mask * A
+            pass
 
         return V, A
         
@@ -245,15 +275,18 @@ class Agent():
                                             chkpt_dir=self.chkpt_dir)
 
     def choose_action(self, observation):
-        print("dsf")
-        print(self.action_space)
-        print(observation["buy_count"])
-        if np.random.random() > self.epsilon:
+        #if np.random.random() > self.epsilon:
+        if np.random.random() > 0:
             state = observation
             _, advantage = self.q_eval.forward(state)
             action = torch.argmax(advantage).item()
         else:
-            action = np.random.choice(self.action_space)
+            if observation["buy_count"] == 0:
+                action = np.random.choice([0,1])
+            elif observation["buy_count"] > 0 and observation["buy_count"] < 5:
+                action = np.random.choice([self.action_space])
+            else:
+                action = np.random.choice([1,2])
 
         return action
 
@@ -278,6 +311,7 @@ class Agent():
         self.q_next.load_checkpoints()
 
     def learn(self):
+        torch.autograd.set_detect_anomaly(True)
         if self.memory.mem_cntr < self.batch_size:
             return
 
@@ -308,15 +342,15 @@ class Agent():
         q_eval = torch.add(V_s_eval, (A_s_eval - A_s_eval.mean(dim=1, keepdim=True)))
 
         max_actions = torch.argmax(q_eval, dim=1)
-
-        q_next[dones] = 0.0
+    
+        q_next[dones.bool()] = 0.0
 
         q_target = rewards + self.gamma * q_next[indices, max_actions]
 
         loss = self.q_eval.loss(q_target, q_pred).to(self.q_eval.device)
-        
         loss.backward()
         self.q_eval.optimizer.step()
         self.learn_step_counter += 1
 
         self.decrement_epsilon()
+        torch.autograd.set_detect_anomaly(False)
