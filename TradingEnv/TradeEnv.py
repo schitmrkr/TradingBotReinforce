@@ -3,6 +3,8 @@ import random
 import time
 import copy
 
+from DeepQDuelDouble import Agent
+
 file_to_open = "15m-w-ta-feature.csv"
 
 data = np.loadtxt(file_to_open,
@@ -173,23 +175,40 @@ class TradingEnv():
 
 if __name__ == "__main__":
     env = TradingEnv(balance = 5000)
+
+    load_checkpoint = False
+
+    agent = Agent(gamma=0.99, epsilon=1.0, lr=5e-4, input_dims=100, n_actions=3, mem_size=10000, 
+                    eps_min=0.01, batch_size=64, eps_dec=1e-3, replace=100)
     num_episodes = 1
+
+    if load_checkpoint:
+        agent.load_models()
+
+    filename = "agent-trader"
+
     for i in range(num_episodes):
         env.reset()
+        init_state = env.state
+        #print(init_state)
+        state = init_state
         while not env.done:
             print("**********************")
-            if env.state["balance"] < env.trade_amount:
-                rand_action = random.choice([1, 2])
-            elif env.state["buy_count"] < 1:
-                rand_action = random.choice([0, 1])
-            else:
-                rand_action = random.choice([0,1,2])
+            action = agent.choose_action(state)
+            print(action)
 
-            inv_action_map = {v: k for k, v in env.action_map.items()}
-            print(inv_action_map[rand_action])
+            old_state, new_state, reward, done =  env.step(action)
 
-            old_state, new_state, reward, done =  env.step(rand_action)
+            print(reward, done)
+            print(old_state["buy_count"])
+            print(new_state["buy_count"])
+            break
+
+            """
             #print(old_state["raw_state"]["close"][-10:], new_state["raw_state"]["close"][-10:], reward, done)
             print(old_state["reward"], old_state["balance"], old_state["buy_count"],old_state["buy_details"])
             print(new_state["reward"], new_state["balance"], new_state["buy_count"],new_state["buy_details"])
-            time.sleep(1)
+
+            state = new_state
+            time.sleep(0.2)
+            """
