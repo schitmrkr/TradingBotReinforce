@@ -3,6 +3,9 @@ import random
 import time
 import copy
 
+import logging
+logging.basicConfig(level=logging.INFO, filename="training_state.log",filemode="w")
+
 from DeepQDuelDouble import Agent
 from utils import plot_learning_curve
 
@@ -11,10 +14,14 @@ file_to_open = "15m-w-ta-feature.csv"
 data = np.loadtxt(file_to_open,
                   delimiter=",", dtype=float)
 
+print(data.shape)
+data_train = data[:int(data.shape[0]/3),:]
+data_test = data[int(data.shape[0]/3):int(data.shape[0]*2/3)]
+data_val = data[int(data.shape[0]*2/3):]
 
 
 class TradeData():
-    def __init__(self, data=data, window_size=100):
+    def __init__(self, data=data_train, window_size=100):
         self.raw_data = data
         self.window_size = window_size
         self.raw_mapping = {
@@ -68,6 +75,7 @@ class TradingEnv():
         self.initial_index = self.trade_data.window_size
 
         self.action_dims = 3
+        self.n_buys = 3
         self.action_space = [i for i in range(self.action_dims)]
         
         self.raw_state = self.trade_data.get_raw_state_from_sample(self.trade_data.sample_data_raw(self.initial_index))
@@ -102,6 +110,7 @@ class TradingEnv():
         }
 
     def reset(self):
+        self.done = False
         self.state = {
             "current_index": [self.initial_index],
             "reward": [0],
@@ -118,7 +127,10 @@ class TradingEnv():
             raise ValueError("Episode is already done. Please reset the environment.")
 
         if self.state["balance"][-1] < self.trade_amount and action == 0:
-            raise Exception("Cannot buy because of low balance")
+            print("Game lost with low balance..")
+            self.done = True
+            return {}, {}, 0, True
+            #raise Exception("Cannot buy because of low balance")
 
         if self.state["buy_count"][-1] < 1 and action == 2:
             raise Exception("Cannot sell because of nothing has been bought yet")
@@ -128,15 +140,15 @@ class TradingEnv():
         if action == 0:     #buy
             if self.state["balance"][-1] > self.trade_amount:
                 self.state["raw_state"] = self.trade_data.get_raw_state_from_sample(self.trade_data.sample_data_raw(self.state["current_index"][-1]+1))
-                self.state["reward"] = [0]
+                self.state["reward"] = [0]  #[-self.trade_amount * 0.001] 
                 self.state["balance"][-1] -= self.trade_amount
                 self.state["buy_count"][-1] += 1
 
                 buy_detail = {
-                    "timestamp": self.raw_state["close_time"][-1][-1],
-                    "bought_for": self.trade_amount,
-                    "crypto_price": self.raw_state["close"][-1][-1],
-                    "amount_crypto": self.trade_amount / self.raw_state["close"][-1][-1],
+                    "timestamp": self.state["raw_state"]["close_time"][-1][-2],
+                    "bought_for": self.trade_amount - (self.trade_amount * 0.001),
+                    "crypto_price": self.state["raw_state"]["close"][-1][-2],
+                    "amount_crypto":  self.trade_amount - (self.trade_amount * 0.001) / self.state["raw_state"]["close"][-1][-2],
                 }
 
                 self.state["buy_details"].append(buy_detail)
@@ -152,9 +164,9 @@ class TradingEnv():
                     total_profit += ((sold_price - buy_detail["crypto_price"]) / buy_detail["crypto_price"]) * buy_detail["bought_for"]
                     total_used_balance += buy_detail["bought_for"]
             self.state["raw_state"] = self.trade_data.get_raw_state_from_sample(self.trade_data.sample_data_raw(self.state["current_index"][-1]+1))
-            self.state["reward"] = [total_profit]
-            self.state["balance"][-1] += total_profit + total_used_balance
-            self.state["buy_count"][-1] = 0
+            self.state["reward"] = [total_profit - (total_used_balance * 0.001)]
+            self.state["balance"][-1] += total_profit + total_used_balance - (total_used_balance * 0.001)
+            self.state["buy_count"][-1] = 0 
             self.state["buy_details"] = []
 
         self.state["current_index"][-1] += 1
@@ -180,16 +192,16 @@ class TradingEnv():
         
 
 if __name__ == "__main__":
-    env = TradingEnv(balance = 5000)
-    agent = Agent(gamma=0.99, epsilon=1.0, lr=5e-4, input_dims=100, n_actions=3, mem_size=10000, 
-                    eps_min=0.01, batch_size=64, eps_dec=1e-3, replace=100)
+    env = TradingEnv(data=data_train, balance = 1000)
+    agent = Agent(gamma=0.99, epsilon=0.05, lr=5e-4, input_dims=100, n_actions=3, mem_size=10000, 
+                    eps_min=0.01, batch_size=32, eps_dec=1e-3, replace=100, n_buys=3)
 
-    load_checkpoint = False
+    load_checkpoint = True
     if load_checkpoint:
         agent.load_models()
 
     filename = "agent-trader.png"
-    num_episodes = 1000
+    num_episodes = 50
 
     scores, eps_history = [], []
 
@@ -198,17 +210,29 @@ if __name__ == "__main__":
         init_state = env.state
         state = init_state
         score = 0
-        i = 0
         while not env.done:
             action = agent.choose_action(state)
             #print(action)
             old_state, new_state, reward, done =  env.step(action)
+            if old_state == {}:
+                break
             score += reward
 
             agent.store_transition(old_state, action, reward, new_state, int(done))
             agent.learn()
 
             state = new_state
+
+            logging.info(str(old_state["current_index"][-1]) + " " + str(old_state["balance"][-1]) + " " + str(old_state["buy_count"][-1]) + " " + str(old_state["reward"][-1]) + " " + str(old_state["raw_state"]["close"][-1][-1]))
+            logging.info(str(new_state["current_index"][-1]) + " " + str(new_state["balance"][-1]) + " " + str(new_state["buy_count"][-1]) + " " + str(new_state["reward"][-1]) + " " + str(new_state["raw_state"]["close"][-1][-1]))
+            logging.info(str(action) + " " + str(reward) + " " + str(score))
+            logging.info(str(agent.epsilon))
+            logging.info("******************")
+
+            """print(old_state["current_index"], old_state["balance"], old_state["buy_count"], old_state["reward"], old_state["raw_state"]["close"][-1][-1])
+            print(new_state["current_index"], new_state["balance"], new_state["buy_count"], new_state["reward"], new_state["raw_state"]["close"][-1][-1])
+            print(action, reward, score)
+            print("*******************")"""
 
         scores.append(score)
         avg_score = np.mean(scores[-100:])
@@ -217,8 +241,8 @@ if __name__ == "__main__":
                 'average score %.1f' % avg_score, 
                 'epsilon %.3f' % agent.epsilon)
 
-        if i>10 and i % 10 == 0:
-            agent.save_models()
+        #if i>0 and i % 1 == 0:
+        agent.save_models()
 
         eps_history.append(agent.epsilon)
 

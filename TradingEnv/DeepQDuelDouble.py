@@ -120,13 +120,14 @@ class ReplayBuffer():
 
 
 class DuelingDeepQNetwork(nn.Module):
-    def __init__(self, lr, n_actions, name, input_dim, chkpt_dir):
+    def __init__(self, lr, n_actions, name, input_dim, chkpt_dir, n_buys):
         super(DuelingDeepQNetwork, self).__init__()
         self.chkpt_dir = chkpt_dir
         self.checkpoint_file = os.path.join(self.chkpt_dir + name)
 
         self.input_dim = input_dim
         self.n_actions = n_actions
+        self.n_buys = n_buys
 
         #Neural Divergence
         self.layernorm_price = nn.LayerNorm(input_dim)
@@ -225,7 +226,7 @@ class DuelingDeepQNetwork(nn.Module):
             A_new = A.clone()
             A_new[:,2] = torch.min(A)
             A = A_new
-        elif state["buy_count"][-1] >= 5:
+        elif state["buy_count"][-1] >= self.n_buys:
             A_new = A.clone()
             A_new[:,0] = torch.min(A)
             A = A_new
@@ -246,7 +247,7 @@ class DuelingDeepQNetwork(nn.Module):
 class Agent():
     def __init__(self, gamma, epsilon, lr, n_actions, input_dims, 
                     mem_size, batch_size, eps_min=0.01, eps_dec=1e-5,
-                    replace=1000, chkpt_dir='tmp/duelingddqn/'):
+                    replace=1000, chkpt_dir='tmp/duelingddqn/', n_buys=3):
         self.gamma = gamma
         self.epsilon = epsilon
         self.lr = lr
@@ -254,6 +255,8 @@ class Agent():
         self.input_dims = input_dims
         self.mem_size = mem_size
         self.batch_size = batch_size
+
+        self.n_buys = n_buys
 
         self.eps_min = eps_min
         self.eps_dec = eps_dec
@@ -269,10 +272,10 @@ class Agent():
 
         self.q_eval = DuelingDeepQNetwork(self.lr, self.n_actions, input_dim=input_dims, 
                                             name='btc-15m-ddqn-qeval',
-                                            chkpt_dir=self.chkpt_dir)
+                                            chkpt_dir=self.chkpt_dir, n_buys=self.n_buys)
         self.q_next = DuelingDeepQNetwork(self.lr, self.n_actions, input_dim=input_dims, 
                                             name='btc-15m-ddqn-qnext',
-                                            chkpt_dir=self.chkpt_dir)
+                                            chkpt_dir=self.chkpt_dir, n_buys=self.n_buys)
 
     def choose_action(self, observation):
         #if np.random.random() > self.epsilon:
@@ -283,7 +286,7 @@ class Agent():
         else:
             if observation["buy_count"] == 0:
                 action = np.random.choice([0,1])
-            elif observation["buy_count"] > 0 and observation["buy_count"] < 5:
+            elif observation["buy_count"] > 0 and observation["buy_count"] < self.n_buys:
                 action = np.random.choice([self.action_space])
             else:
                 action = np.random.choice([1,2])
